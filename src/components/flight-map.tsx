@@ -19,7 +19,9 @@ import { filterAircraftBySearch } from "@/lib/opensky/filter-aircraft";
 import type { AircraftState } from "@/lib/opensky/types";
 
 const DEFAULT_STYLE = "https://demotiles.maplibre.org/style.json";
-const POLL_MS = 8000;
+/** Aligned with OpenSky ~10s anonymous guidance; server also caches identical bbox ~12s. */
+const POLL_MS = 12_000;
+const FETCH_TIMEOUT_MS = 35_000;
 const BBOX_DEBOUNCE_MS = 400;
 const SOURCE_ID = "skytrack-aircraft";
 const LAYER_SYMBOL = "skytrack-aircraft-symbol";
@@ -126,6 +128,8 @@ export const FlightMap = () => {
   const abortRef = useRef<AbortController | null>(null);
   /** Same `/api/opensky/states?...` already fetching — skip to avoid cancel spam. */
   const inFlightStatesUrlRef = useRef<string | null>(null);
+  /** Bumps when a newer fetch supersedes or on unmount — ignore stale AbortError. */
+  const fetchGenerationRef = useRef(0);
   const debounceTimerRef = useRef<number>(0);
   const hadAnyResponseRef = useRef(false);
   /** URL-driven selection applied for current data; reset when the aircraft drops out of the snapshot. */
@@ -208,9 +212,12 @@ export const FlightMap = () => {
     }
 
     abortRef.current?.abort();
+    const myGen = ++fetchGenerationRef.current;
     const ac = new AbortController();
     abortRef.current = ac;
     inFlightStatesUrlRef.current = url;
+
+    const timeoutId = window.setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
 
     const firstLoad = !hadAnyResponseRef.current;
     if (firstLoad) setInitialDataLoading(true);
@@ -268,11 +275,20 @@ export const FlightMap = () => {
         }
       }
     } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") return;
+      if (e instanceof DOMException && e.name === "AbortError") {
+        if (fetchGenerationRef.current !== myGen) return;
+        hadAnyResponseRef.current = true;
+        setApiError(
+          "Request timed out or was interrupted. OpenSky may be slow or overloaded — try again in a moment.",
+        );
+        setAircraft([]);
+        return;
+      }
       hadAnyResponseRef.current = true;
       setApiError("Network error while loading flight data.");
       setAircraft([]);
     } finally {
+      window.clearTimeout(timeoutId);
       if (inFlightStatesUrlRef.current === url) {
         inFlightStatesUrlRef.current = null;
       }
@@ -287,6 +303,7 @@ export const FlightMap = () => {
     }, POLL_MS);
     return () => {
       window.clearInterval(id);
+      fetchGenerationRef.current += 1;
       abortRef.current?.abort();
       inFlightStatesUrlRef.current = null;
     };
@@ -553,7 +570,7 @@ export const FlightMap = () => {
   const errorBanner =
     apiError ??
     (rateLimitEndMs != null
-      ? `OpenSky rate limit. Next request in ${rateLimitRemainingSec}s.`
+      ? `OpenSky 429 — credits or rate limit. Retry in ${rateLimitRemainingSec}s. Anonymous tier is ~400 credits/day per IP; dev reloads and Vercel burn them fast — add OPENSKY_USERNAME/PASSWORD or wait until reset.`
       : null);
 
   return (

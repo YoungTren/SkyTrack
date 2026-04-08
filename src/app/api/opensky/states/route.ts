@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 
+import { bboxCacheKey, getCachedStates, setCachedStates } from "@/lib/opensky/bbox-response-cache";
 import { parseOpenskyJson } from "@/lib/opensky/parse";
+import { getOpenskyAuthorizationHeader } from "@/lib/opensky/server-auth";
 
 const OPENSKY_BASE = "https://opensky-network.org/api/states/all";
 
@@ -37,18 +39,19 @@ const parseBbox = (sp: URLSearchParams): {
   return { ok: true, lamin, lomin, lamax, lomax };
 };
 
-const openskyAuthHeader = (): string | undefined => {
-  const user = process.env.OPENSKY_USERNAME?.trim();
-  const pass = process.env.OPENSKY_PASSWORD?.trim();
-  if (!user || !pass) return undefined;
-  const token = Buffer.from(`${user}:${pass}`, "utf8").toString("base64");
-  return `Basic ${token}`;
-};
-
 export async function GET(request: NextRequest) {
   const bbox = parseBbox(request.nextUrl.searchParams);
   if (!bbox.ok) {
     return NextResponse.json({ error: "invalid_bbox", code: bbox.message }, { status: 400 });
+  }
+
+  const cKey = bboxCacheKey(bbox);
+  const cached = getCachedStates(cKey);
+  if (cached) {
+    return NextResponse.json(
+      { time: cached.time, aircraft: cached.aircraft, cached: true },
+      { headers: { "Cache-Control": "private, max-age=8" } },
+    );
   }
 
   const url = new URL(OPENSKY_BASE);
@@ -58,7 +61,7 @@ export async function GET(request: NextRequest) {
   url.searchParams.set("lomax", String(bbox.lomax));
 
   const headers: HeadersInit = { Accept: "application/json" };
-  const auth = openskyAuthHeader();
+  const auth = await getOpenskyAuthorizationHeader();
   if (auth) headers.Authorization = auth;
 
   const res = await fetch(url.toString(), {
@@ -92,9 +95,12 @@ export async function GET(request: NextRequest) {
 
   const json: unknown = await res.json();
   const aircraft = parseOpenskyJson(json);
+  const time = typeof (json as { time?: unknown }).time === "number" ? (json as { time: number }).time : null;
 
-  return NextResponse.json({
-    time: typeof (json as { time?: unknown }).time === "number" ? (json as { time: number }).time : null,
-    aircraft,
-  });
+  setCachedStates(cKey, { time, aircraft });
+
+  return NextResponse.json(
+    { time, aircraft, cached: false },
+    { headers: { "Cache-Control": "private, max-age=8" } },
+  );
 }

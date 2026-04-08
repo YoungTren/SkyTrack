@@ -18,10 +18,12 @@ See `.env.example`. Summary:
 | Variable | Required | Purpose |
 |----------|----------|---------|
 | `NEXT_PUBLIC_MAP_STYLE_URL` | No | MapLibre-compatible style JSON. If unset, the app uses MapLibre demo tiles (fine for development, not ideal for production). |
-| `OPENSKY_USERNAME` | No | OpenSky account username for server-side Basic Auth. |
-| `OPENSKY_PASSWORD` | No | OpenSky account password (server-only; never sent to the browser). |
+| `OPENSKY_CLIENT_ID` | No* | OAuth2 API client id from your OpenSky account (preferred). |
+| `OPENSKY_CLIENT_SECRET` | No* | OAuth2 client secret (server-only). |
+| `OPENSKY_USERNAME` | No | Legacy Basic Auth username. |
+| `OPENSKY_PASSWORD` | No | Legacy Basic Auth password (server-only). |
 
-If `OPENSKY_USERNAME` / `OPENSKY_PASSWORD` are omitted, requests are anonymous (lower daily API credits).
+\*Recommended: with OAuth credentials you get the **~4 000 credits/day** tier; without them the app falls back to Basic Auth if set, otherwise anonymous (**~400 credits/day**). The API route also **caches identical bbox responses for ~12s** so many browser polls reuse one OpenSky call.
 
 ## OpenSky limits
 
