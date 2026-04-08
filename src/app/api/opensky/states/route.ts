@@ -10,7 +10,8 @@ import { parseOpenskyJson } from "@/lib/opensky/parse";
 import { getOpenskyAuthorizationHeader } from "@/lib/opensky/server-auth";
 
 const OPENSKY_BASE = "https://opensky-network.org/api/states/all";
-const UPSTREAM_FETCH_MS = 24_000;
+/** Stay under ~10s total with OAuth + cold start on constrained hosts (e.g. Vercel Hobby). */
+const UPSTREAM_FETCH_MS = 5_500;
 
 export const maxDuration = 30;
 

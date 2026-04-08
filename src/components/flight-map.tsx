@@ -12,6 +12,7 @@ import { MapControls } from "@/components/skytrack/map-controls";
 import {
   boundsToBboxWithPadding,
   bboxToQueryRecord,
+  clampBboxForUpstreamFetch,
   DEFAULT_MAP_BBOX,
   type Bbox,
 } from "@/lib/opensky/bbox";
@@ -204,7 +205,9 @@ export const FlightMap = () => {
   fetchStatesRef.current = async () => {
     if (Date.now() < backoffUntilRef.current) return;
 
-    const params = new URLSearchParams(bboxToQueryRecord(bboxRef.current));
+    const params = new URLSearchParams(
+      bboxToQueryRecord(clampBboxForUpstreamFetch(bboxRef.current)),
+    );
     const url = `/api/opensky/states?${params.toString()}`;
 
     if (inFlightStatesUrlRef.current === url) {

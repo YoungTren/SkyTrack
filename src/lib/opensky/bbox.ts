@@ -80,8 +80,9 @@ export const bboxToQueryRecord = (b: Bbox): Record<string, string> => ({
  * and return non-JSON errors. Shrink to a max window centered on the requested area.
  */
 export const clampBboxForUpstreamFetch = (b: Bbox): Bbox => {
-  const maxLatSpan = 22;
-  const maxLonSpan = 36;
+  /** Kept small so OpenSky + OAuth fit under typical ~10s serverless ceilings (e.g. Vercel Hobby). */
+  const maxLatSpan = 12;
+  const maxLonSpan = 20;
   const latSpan = b.lamax - b.lamin;
   const lonSpan = b.lomax - b.lomin;
   if (latSpan <= maxLatSpan && lonSpan <= maxLonSpan) return b;

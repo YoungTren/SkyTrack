@@ -13,6 +13,8 @@ type TokenJson = {
 
 let oauthCache: { token: string; expiresAtMs: number } | null = null;
 
+const OAUTH_FETCH_MS = 3_500;
+
 const fetchOAuthAccessToken = async (): Promise<{ token: string; expiresInSec: number } | null> => {
   const clientId = process.env.OPENSKY_CLIENT_ID?.trim();
   const clientSecret = process.env.OPENSKY_CLIENT_SECRET?.trim();
@@ -24,31 +26,37 @@ const fetchOAuthAccessToken = async (): Promise<{ token: string; expiresInSec: n
     client_secret: clientSecret,
   });
 
-  const res = await fetch(OPENSKY_TOKEN_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-    body: body.toString(),
-    cache: "no-store",
-  });
+  try {
+    const res = await fetch(OPENSKY_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
+      body: body.toString(),
+      cache: "no-store",
+      signal: AbortSignal.timeout(OAUTH_FETCH_MS),
+    });
 
-  if (!res.ok) {
-    console.warn("[opensky] oauth_token_failed", { status: res.status });
+    if (!res.ok) {
+      console.warn("[opensky] oauth_token_failed", { status: res.status });
+      return null;
+    }
+
+    const json: unknown = await res.json();
+    const parsed = json as TokenJson;
+    if (typeof parsed.access_token !== "string" || parsed.access_token.length === 0) {
+      console.warn("[opensky] oauth_token_missing_access_token");
+      return null;
+    }
+
+    const expiresInSec =
+      typeof parsed.expires_in === "number" && parsed.expires_in > 60
+        ? parsed.expires_in
+        : 300;
+
+    return { token: parsed.access_token, expiresInSec };
+  } catch (err) {
+    console.warn("[opensky] oauth_token_error", err);
     return null;
   }
-
-  const json: unknown = await res.json();
-  const parsed = json as TokenJson;
-  if (typeof parsed.access_token !== "string" || parsed.access_token.length === 0) {
-    console.warn("[opensky] oauth_token_missing_access_token");
-    return null;
-  }
-
-  const expiresInSec =
-    typeof parsed.expires_in === "number" && parsed.expires_in > 60
-      ? parsed.expires_in
-      : 300;
-
-  return { token: parsed.access_token, expiresInSec };
 };
 
 /**
