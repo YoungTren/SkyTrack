@@ -97,7 +97,7 @@ export const FlightSearchBar = ({
 
   return (
     <div ref={rootRef} className={cn("relative z-50", className)}>
-      <div className="border-border/60 bg-popover/95 shadow-lg backdrop-blur-md rounded-xl border">
+      <div className="border-border/60 bg-popover/95 text-popover-foreground shadow-lg backdrop-blur-md rounded-xl border">
         <div className="relative flex items-center gap-2 px-3 py-2">
           <SearchIcon className="text-muted-foreground size-4 shrink-0" aria-hidden />
           <Input
@@ -113,7 +113,7 @@ export const FlightSearchBar = ({
             onFocus={() => setOpen(true)}
             onKeyDown={onKeyDown}
             placeholder="Search callsign or ICAO24…"
-            className="h-9 flex-1 border-0 bg-transparent shadow-none focus-visible:ring-0"
+            className="h-9 flex-1 border-0 bg-transparent text-popover-foreground shadow-none placeholder:text-muted-foreground focus-visible:ring-0"
             role="combobox"
             aria-autocomplete="list"
             aria-expanded={showList}
@@ -168,7 +168,7 @@ export const FlightSearchBar = ({
                 often differ from the callsign transmitted on the radio.
               </p>
               {iataLike ? (
-                <p className="text-[12px] leading-snug font-medium text-foreground">
+                <p className="text-popover-foreground text-[12px] leading-snug font-medium">
                   This input looks like an IATA flight number. SkyTrack does not map those to
                   callsigns; use the callsign or ICAO24 when you have them.
                 </p>
