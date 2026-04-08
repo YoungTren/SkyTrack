@@ -124,6 +124,8 @@ export const FlightMap = () => {
   const bboxRef = useRef<Bbox>({ ...DEFAULT_MAP_BBOX });
   const backoffUntilRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
+  /** Same `/api/opensky/states?...` already fetching — skip to avoid cancel spam. */
+  const inFlightStatesUrlRef = useRef<string | null>(null);
   const debounceTimerRef = useRef<number>(0);
   const hadAnyResponseRef = useRef(false);
   /** URL-driven selection applied for current data; reset when the aircraft drops out of the snapshot. */
@@ -201,9 +203,14 @@ export const FlightMap = () => {
     const params = new URLSearchParams(bboxToQueryRecord(bboxRef.current));
     const url = `/api/opensky/states?${params.toString()}`;
 
+    if (inFlightStatesUrlRef.current === url) {
+      return;
+    }
+
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
+    inFlightStatesUrlRef.current = url;
 
     const firstLoad = !hadAnyResponseRef.current;
     if (firstLoad) setInitialDataLoading(true);
@@ -266,6 +273,9 @@ export const FlightMap = () => {
       setApiError("Network error while loading flight data.");
       setAircraft([]);
     } finally {
+      if (inFlightStatesUrlRef.current === url) {
+        inFlightStatesUrlRef.current = null;
+      }
       setInitialDataLoading(false);
     }
   };
@@ -278,6 +288,7 @@ export const FlightMap = () => {
     return () => {
       window.clearInterval(id);
       abortRef.current?.abort();
+      inFlightStatesUrlRef.current = null;
     };
   }, []);
 
