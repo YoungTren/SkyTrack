@@ -10,8 +10,12 @@ import { parseOpenskyJson } from "@/lib/opensky/parse";
 import { getOpenskyAuthorizationHeader } from "@/lib/opensky/server-auth";
 
 const OPENSKY_BASE = "https://opensky-network.org/api/states/all";
-/** Stay under ~10s total with OAuth + cold start on constrained hosts (e.g. Vercel Hobby). */
-const UPSTREAM_FETCH_MS = 5_500;
+
+/** One wall-clock budget for OAuth + OpenSky so sequential timeouts do not exceed the platform limit. */
+const UPSTREAM_BUDGET_MS = process.env.VERCEL ? 8_200 : 28_000;
+
+const successCacheControl =
+  "public, s-maxage=10, stale-while-revalidate=30, max-age=5";
 
 export const maxDuration = 30;
 
@@ -61,7 +65,7 @@ export async function GET(request: NextRequest) {
     if (cached) {
       return NextResponse.json(
         { time: cached.time, aircraft: cached.aircraft, cached: true },
-        { headers: { "Cache-Control": "private, max-age=8" } },
+        { headers: { "Cache-Control": successCacheControl } },
       );
     }
 
@@ -71,14 +75,15 @@ export async function GET(request: NextRequest) {
     url.searchParams.set("lamax", String(bbox.lamax));
     url.searchParams.set("lomax", String(bbox.lomax));
 
+    const netSignal = AbortSignal.timeout(UPSTREAM_BUDGET_MS);
     const headers: HeadersInit = { Accept: "application/json" };
-    const auth = await getOpenskyAuthorizationHeader();
+    const auth = await getOpenskyAuthorizationHeader({ signal: netSignal });
     if (auth) headers.Authorization = auth;
 
     const res = await fetch(url.toString(), {
       headers,
       cache: "no-store",
-      signal: AbortSignal.timeout(UPSTREAM_FETCH_MS),
+      signal: netSignal,
     });
 
     const retryAfterRaw = res.headers.get("X-Rate-Limit-Retry-After-Seconds");
@@ -114,16 +119,20 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json(
       { time, aircraft, cached: false },
-      { headers: { "Cache-Control": "private, max-age=8" } },
+      { headers: { "Cache-Control": successCacheControl } },
     );
   } catch (err) {
+    const aborted =
+      err instanceof Error && (err.name === "AbortError" || err.name === "TimeoutError");
     console.error("[opensky] states_route", err);
     return NextResponse.json(
       {
         error: "opensky_proxy_error",
-        message: "Upstream fetch failed or timed out",
+        message: aborted
+          ? "OpenSky or auth request exceeded the time budget — try again or zoom in."
+          : "Upstream fetch failed or timed out",
       },
-      { status: 502 },
+      { status: aborted ? 504 : 502 },
     );
   }
 }

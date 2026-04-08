@@ -13,9 +13,9 @@ type TokenJson = {
 
 let oauthCache: { token: string; expiresAtMs: number } | null = null;
 
-const OAUTH_FETCH_MS = 3_500;
-
-const fetchOAuthAccessToken = async (): Promise<{ token: string; expiresInSec: number } | null> => {
+const fetchOAuthAccessToken = async (
+  signal?: AbortSignal,
+): Promise<{ token: string; expiresInSec: number } | null> => {
   const clientId = process.env.OPENSKY_CLIENT_ID?.trim();
   const clientSecret = process.env.OPENSKY_CLIENT_SECRET?.trim();
   if (!clientId || !clientSecret) return null;
@@ -32,7 +32,7 @@ const fetchOAuthAccessToken = async (): Promise<{ token: string; expiresInSec: n
       headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
       body: body.toString(),
       cache: "no-store",
-      signal: AbortSignal.timeout(OAUTH_FETCH_MS),
+      signal,
     });
 
     if (!res.ok) {
@@ -59,17 +59,22 @@ const fetchOAuthAccessToken = async (): Promise<{ token: string; expiresInSec: n
   }
 };
 
+type AuthOpts = {
+  /** Shared with OpenSky fetch so OAuth + REST stay within one serverless budget. */
+  signal?: AbortSignal;
+};
+
 /**
  * Returns `Authorization` header value for OpenSky REST, or `undefined` for anonymous.
  * Caches OAuth token until ~1 min before expiry.
  */
-export const getOpenskyAuthorizationHeader = async (): Promise<string | undefined> => {
+export const getOpenskyAuthorizationHeader = async (opts?: AuthOpts): Promise<string | undefined> => {
   const marginMs = 60_000;
   if (oauthCache && Date.now() < oauthCache.expiresAtMs - marginMs) {
     return `Bearer ${oauthCache.token}`;
   }
 
-  const oauth = await fetchOAuthAccessToken();
+  const oauth = await fetchOAuthAccessToken(opts?.signal);
   if (oauth) {
     oauthCache = {
       token: oauth.token,
