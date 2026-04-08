@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { bboxCacheKey, getCachedStates, setCachedStates } from "@/lib/opensky/bbox-response-cache";
+import { clampBboxForUpstreamFetch } from "@/lib/opensky/bbox";
+import {
+  bboxCacheKey,
+  getCachedStates,
+  setCachedStates,
+} from "@/lib/opensky/bbox-response-cache";
 import { parseOpenskyJson } from "@/lib/opensky/parse";
 import { getOpenskyAuthorizationHeader } from "@/lib/opensky/server-auth";
 
 const OPENSKY_BASE = "https://opensky-network.org/api/states/all";
+const UPSTREAM_FETCH_MS = 24_000;
+
+export const maxDuration = 30;
 
 const parseBbox = (sp: URLSearchParams): {
   ok: true;
@@ -40,67 +48,81 @@ const parseBbox = (sp: URLSearchParams): {
 };
 
 export async function GET(request: NextRequest) {
-  const bbox = parseBbox(request.nextUrl.searchParams);
-  if (!bbox.ok) {
-    return NextResponse.json({ error: "invalid_bbox", code: bbox.message }, { status: 400 });
-  }
+  try {
+    const parsed = parseBbox(request.nextUrl.searchParams);
+    if (!parsed.ok) {
+      return NextResponse.json({ error: "invalid_bbox", code: parsed.message }, { status: 400 });
+    }
 
-  const cKey = bboxCacheKey(bbox);
-  const cached = getCachedStates(cKey);
-  if (cached) {
+    const bbox = clampBboxForUpstreamFetch(parsed);
+    const cKey = bboxCacheKey(bbox);
+    const cached = getCachedStates(cKey);
+    if (cached) {
+      return NextResponse.json(
+        { time: cached.time, aircraft: cached.aircraft, cached: true },
+        { headers: { "Cache-Control": "private, max-age=8" } },
+      );
+    }
+
+    const url = new URL(OPENSKY_BASE);
+    url.searchParams.set("lamin", String(bbox.lamin));
+    url.searchParams.set("lomin", String(bbox.lomin));
+    url.searchParams.set("lamax", String(bbox.lamax));
+    url.searchParams.set("lomax", String(bbox.lomax));
+
+    const headers: HeadersInit = { Accept: "application/json" };
+    const auth = await getOpenskyAuthorizationHeader();
+    if (auth) headers.Authorization = auth;
+
+    const res = await fetch(url.toString(), {
+      headers,
+      cache: "no-store",
+      signal: AbortSignal.timeout(UPSTREAM_FETCH_MS),
+    });
+
+    const retryAfterRaw = res.headers.get("X-Rate-Limit-Retry-After-Seconds");
+    const retryAfterSeconds = retryAfterRaw != null && retryAfterRaw !== "" ? Number(retryAfterRaw) : null;
+    const safeRetry =
+      retryAfterSeconds != null && !Number.isNaN(retryAfterSeconds) && retryAfterSeconds >= 0
+        ? retryAfterSeconds
+        : null;
+
+    if (res.status === 429) {
+      console.warn("[opensky] rate_limited", { status: 429, retryAfterSeconds: safeRetry });
+    } else if (res.status >= 500) {
+      console.warn("[opensky] upstream_error", { status: res.status });
+    }
+
+    if (!res.ok) {
+      return NextResponse.json(
+        {
+          error: "opensky_request_failed",
+          status: res.status,
+          retryAfterSeconds: safeRetry,
+        },
+        { status: res.status === 429 ? 429 : 502 },
+      );
+    }
+
+    const json: unknown = await res.json();
+    const aircraft = parseOpenskyJson(json);
+    const time =
+      typeof (json as { time?: unknown }).time === "number" ? (json as { time: number }).time : null;
+
+    setCachedStates(cKey, { time, aircraft });
+
     return NextResponse.json(
-      { time: cached.time, aircraft: cached.aircraft, cached: true },
+      { time, aircraft, cached: false },
       { headers: { "Cache-Control": "private, max-age=8" } },
     );
-  }
-
-  const url = new URL(OPENSKY_BASE);
-  url.searchParams.set("lamin", String(bbox.lamin));
-  url.searchParams.set("lomin", String(bbox.lomin));
-  url.searchParams.set("lamax", String(bbox.lamax));
-  url.searchParams.set("lomax", String(bbox.lomax));
-
-  const headers: HeadersInit = { Accept: "application/json" };
-  const auth = await getOpenskyAuthorizationHeader();
-  if (auth) headers.Authorization = auth;
-
-  const res = await fetch(url.toString(), {
-    headers,
-    cache: "no-store",
-  });
-
-  const retryAfterRaw = res.headers.get("X-Rate-Limit-Retry-After-Seconds");
-  const retryAfterSeconds = retryAfterRaw != null && retryAfterRaw !== "" ? Number(retryAfterRaw) : null;
-  const safeRetry =
-    retryAfterSeconds != null && !Number.isNaN(retryAfterSeconds) && retryAfterSeconds >= 0
-      ? retryAfterSeconds
-      : null;
-
-  if (res.status === 429) {
-    console.warn("[opensky] rate_limited", { status: 429, retryAfterSeconds: safeRetry });
-  } else if (res.status >= 500) {
-    console.warn("[opensky] upstream_error", { status: res.status });
-  }
-
-  if (!res.ok) {
+  } catch (err) {
+    console.error("[opensky] states_route", err);
     return NextResponse.json(
       {
-        error: "opensky_request_failed",
-        status: res.status,
-        retryAfterSeconds: safeRetry,
+        error: "opensky_proxy_error",
+        message: "Upstream fetch failed or timed out",
       },
-      { status: res.status === 429 ? 429 : 502 },
+      { status: 502 },
     );
   }
-
-  const json: unknown = await res.json();
-  const aircraft = parseOpenskyJson(json);
-  const time = typeof (json as { time?: unknown }).time === "number" ? (json as { time: number }).time : null;
-
-  setCachedStates(cKey, { time, aircraft });
-
-  return NextResponse.json(
-    { time, aircraft, cached: false },
-    { headers: { "Cache-Control": "private, max-age=8" } },
-  );
 }

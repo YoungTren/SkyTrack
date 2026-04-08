@@ -74,3 +74,32 @@ export const bboxToQueryRecord = (b: Bbox): Record<string, string> => ({
   lamax: String(b.lamax),
   lomax: String(b.lomax),
 });
+
+/**
+ * Very large map views produce huge OpenSky queries that often exceed serverless timeouts
+ * and return non-JSON errors. Shrink to a max window centered on the requested area.
+ */
+export const clampBboxForUpstreamFetch = (b: Bbox): Bbox => {
+  const maxLatSpan = 22;
+  const maxLonSpan = 36;
+  const latSpan = b.lamax - b.lamin;
+  const lonSpan = b.lomax - b.lomin;
+  if (latSpan <= maxLatSpan && lonSpan <= maxLonSpan) return b;
+
+  const cLat = (b.lamin + b.lamax) / 2;
+  const cLon = (b.lomin + b.lomax) / 2;
+  const halfLat = Math.min(latSpan / 2, maxLatSpan / 2);
+  const halfLon = Math.min(lonSpan / 2, maxLonSpan / 2);
+  let lamin = clamp(cLat - halfLat, -85, 85);
+  let lamax = clamp(cLat + halfLat, -85, 85);
+  if (lamin >= lamax) {
+    lamin = clamp(cLat - 5, -85, 85);
+    lamax = clamp(cLat + 5, -85, 85);
+  }
+  let lomin = clamp(cLon - halfLon, -180, 180);
+  let lomax = clamp(cLon + halfLon, -180, 180);
+  if (lomin >= lomax) {
+    return { ...DEFAULT_MAP_BBOX };
+  }
+  return { lamin, lomin, lamax, lomax };
+};
