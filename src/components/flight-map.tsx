@@ -23,7 +23,8 @@ const DEFAULT_STYLE = "https://demotiles.maplibre.org/style.json";
 /** Aligned with OpenSky ~10s anonymous guidance; server also caches identical bbox ~12s. */
 const POLL_MS = 12_000;
 const FETCH_TIMEOUT_MS = 35_000;
-const BBOX_DEBOUNCE_MS = 400;
+/** Fewer overlapping bbox changes while panning before a states request is queued. */
+const BBOX_DEBOUNCE_MS = 700;
 const SOURCE_ID = "skytrack-aircraft";
 const LAYER_SYMBOL = "skytrack-aircraft-symbol";
 const LAYER_HALO = "skytrack-aircraft-halo";
@@ -127,9 +128,11 @@ export const FlightMap = () => {
   const bboxRef = useRef<Bbox>({ ...DEFAULT_MAP_BBOX });
   const backoffUntilRef = useRef(0);
   const abortRef = useRef<AbortController | null>(null);
-  /** Same `/api/opensky/states?...` already fetching — skip to avoid cancel spam. */
-  const inFlightStatesUrlRef = useRef<string | null>(null);
-  /** Bumps when a newer fetch supersedes or on unmount — ignore stale AbortError. */
+  /** Desired `/api/opensky/states?...` from current map bbox; updated on every fetch attempt. */
+  const latestStatesUrlRef = useRef<string | null>(null);
+  /** One proxy request at a time; pan/zoom during flight only updates latest URL — no Abort cancel storm. */
+  const statesFetchBusyRef = useRef(false);
+  /** Bumps on unmount — ignore stale AbortError. */
   const fetchGenerationRef = useRef(0);
   const debounceTimerRef = useRef<number>(0);
   const hadAnyResponseRef = useRef(false);
@@ -203,27 +206,34 @@ export const FlightMap = () => {
   const fetchStatesRef = useRef<() => Promise<void>>(async () => {});
 
   fetchStatesRef.current = async () => {
-    if (Date.now() < backoffUntilRef.current) return;
+    if (Date.now() < backoffUntilRef.current) {
+      if (!statesFetchBusyRef.current) {
+        setInitialDataLoading(false);
+      }
+      return;
+    }
 
     const params = new URLSearchParams(
       bboxToQueryRecord(clampBboxForUpstreamFetch(bboxRef.current)),
     );
     const url = `/api/opensky/states?${params.toString()}`;
 
-    if (inFlightStatesUrlRef.current === url) {
+    latestStatesUrlRef.current = url;
+    if (statesFetchBusyRef.current) {
       return;
     }
 
-    abortRef.current?.abort();
+    statesFetchBusyRef.current = true;
     const myGen = ++fetchGenerationRef.current;
     const ac = new AbortController();
     abortRef.current = ac;
-    inFlightStatesUrlRef.current = url;
 
     const timeoutId = window.setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
 
     const firstLoad = !hadAnyResponseRef.current;
     if (firstLoad) setInitialDataLoading(true);
+
+    const stale = () => latestStatesUrlRef.current !== url;
 
     try {
       const res = await fetch(url, { signal: ac.signal });
@@ -245,10 +255,17 @@ export const FlightMap = () => {
           setAircraft([]);
           return;
         }
+        if (stale()) {
+          return;
+        }
         backoffUntilRef.current = 0;
         setRateLimitEndMs(null);
         setApiError("Flight data is temporarily unavailable.");
         setAircraft([]);
+        return;
+      }
+
+      if (stale()) {
         return;
       }
 
@@ -280,6 +297,9 @@ export const FlightMap = () => {
     } catch (e) {
       if (e instanceof DOMException && e.name === "AbortError") {
         if (fetchGenerationRef.current !== myGen) return;
+        if (stale()) {
+          return;
+        }
         hadAnyResponseRef.current = true;
         setApiError(
           "Request timed out or was interrupted. OpenSky may be slow or overloaded — try again in a moment.",
@@ -287,15 +307,21 @@ export const FlightMap = () => {
         setAircraft([]);
         return;
       }
+      if (stale()) {
+        return;
+      }
       hadAnyResponseRef.current = true;
       setApiError("Network error while loading flight data.");
       setAircraft([]);
     } finally {
       window.clearTimeout(timeoutId);
-      if (inFlightStatesUrlRef.current === url) {
-        inFlightStatesUrlRef.current = null;
+      statesFetchBusyRef.current = false;
+      const want = latestStatesUrlRef.current;
+      if (want !== url) {
+        void fetchStatesRef.current();
+      } else {
+        setInitialDataLoading(false);
       }
-      setInitialDataLoading(false);
     }
   };
 
@@ -308,7 +334,7 @@ export const FlightMap = () => {
       window.clearInterval(id);
       fetchGenerationRef.current += 1;
       abortRef.current?.abort();
-      inFlightStatesUrlRef.current = null;
+      statesFetchBusyRef.current = false;
     };
   }, []);
 
