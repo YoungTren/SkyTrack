@@ -54,9 +54,9 @@ const addPlaneImage = (map: maplibregl.Map) => {
   if (!ctx) return;
   ctx.clearRect(0, 0, w, w);
   ctx.translate(w / 2, w / 2);
-  ctx.fillStyle = "#38bdf8";
-  ctx.strokeStyle = "#0ea5e9";
-  ctx.lineWidth = 1.25;
+  ctx.fillStyle = "#0369a1";
+  ctx.strokeStyle = "#f8fafc";
+  ctx.lineWidth = 2;
   ctx.beginPath();
   ctx.moveTo(0, -26);
   ctx.lineTo(22, 24);
@@ -324,6 +324,22 @@ export const FlightMap = () => {
     apiError == null &&
     !aircraft.some((a) => a.icao24 === icao24FromUrl);
 
+  const searchFiltersMap = searchQuery.trim().length >= 2;
+  const showSearchHidesAll =
+    searchFiltersMap &&
+    aircraftOnMap.length === 0 &&
+    aircraft.length > 0 &&
+    !initialDataLoading &&
+    rateLimitEndMs == null &&
+    apiError == null;
+
+  const showEmptyBbox =
+    hasLoadedSnapshot &&
+    aircraft.length === 0 &&
+    !initialDataLoading &&
+    rateLimitEndMs == null &&
+    apiError == null;
+
   useEffect(() => {
     if (!selectedIcao) return;
     const exists = aircraft.some((a) => a.icao24 === selectedIcao);
@@ -395,7 +411,7 @@ export const FlightMap = () => {
         source: SOURCE_ID,
         layout: {
           "icon-image": "plane-icon",
-          "icon-size": ["interpolate", ["linear"], ["zoom"], 2, 0.55, 8, 0.95],
+          "icon-size": ["interpolate", ["linear"], ["zoom"], 2, 0.7, 8, 1],
           "icon-rotate": ["get", "bearing"],
           "icon-rotation-alignment": "map",
           "icon-allow-overlap": true,
@@ -464,9 +480,21 @@ export const FlightMap = () => {
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map?.isStyleLoaded()) return;
-    const src = map.getSource(SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-    if (src) src.setData(aircraftToGeoJson(aircraftOnMap));
+    if (!map) return;
+    const sync = () => {
+      try {
+        const src = map.getSource(SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+        if (!src || !map.isStyleLoaded()) return;
+        src.setData(aircraftToGeoJson(aircraftOnMap));
+      } catch {
+        /* style/source not ready */
+      }
+    };
+    sync();
+    map.on("idle", sync);
+    return () => {
+      map.off("idle", sync);
+    };
   }, [aircraftOnMap]);
 
   useEffect(() => {
@@ -537,13 +565,50 @@ export const FlightMap = () => {
             Live flight map · open data
           </span>
         </div>
-        <div className="pointer-events-auto w-full max-w-md">
+        <div className="pointer-events-auto flex w-full max-w-md flex-col gap-2">
           <FlightSearchBar
             aircraft={aircraft}
             loading={initialDataLoading}
             onSelect={focusAircraft}
             onQueryChange={onSearchQueryChange}
           />
+          <div className="border-border/50 bg-card/90 text-card-foreground flex flex-col items-center gap-1 rounded-xl border px-3 py-2 text-center shadow-md backdrop-blur-md">
+            <p className="text-xs font-semibold tabular-nums">
+              {initialDataLoading ? (
+                <span className="text-muted-foreground">Loading aircraft…</span>
+              ) : rateLimitEndMs != null || apiError != null ? (
+                <span className="text-muted-foreground">—</span>
+              ) : searchFiltersMap ? (
+                <>
+                  <span className="text-foreground">{aircraftOnMap.length}</span>
+                  <span className="text-muted-foreground font-normal">
+                    {" "}
+                    shown · {aircraft.length} in OpenSky snapshot
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="text-foreground">{aircraft.length}</span>
+                  <span className="text-muted-foreground font-normal">
+                    {" "}
+                    aircraft in view (OpenSky)
+                  </span>
+                </>
+              )}
+            </p>
+            {showSearchHidesAll ? (
+              <p className="text-muted-foreground max-w-sm text-[11px] leading-snug">
+                Search matches nothing in this area. Clear the field to show all {aircraft.length}{" "}
+                aircraft on the map.
+              </p>
+            ) : null}
+            {showEmptyBbox ? (
+              <p className="text-muted-foreground max-w-sm text-[11px] leading-snug">
+                No aircraft in this map box. Zoom out or pan over busier airspace (e.g. Europe, US
+                East Coast).
+              </p>
+            ) : null}
+          </div>
         </div>
       </div>
 
